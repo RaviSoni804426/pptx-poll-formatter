@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.pptx
+!poll_formatter/template.pptx
+out/
+test_decks/
+ref_pptx_poll_format/
