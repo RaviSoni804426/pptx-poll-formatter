@@ -1,4 +1,5 @@
 """Find poll slides in a presentation. Reads only: never modifies a slide."""
+import re
 from dataclasses import dataclass, field
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.presentation import Presentation
@@ -8,6 +9,12 @@ from . import spec
 
 NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 NS_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+
+OPT_MARKER_RE = re.compile(r"^\(?[A-Da-d1-4][\.\)\:\-]\s*")
+INLINE_OPT_RE = re.compile(
+    r"(?:\(?([A-Da-d1-4])[\.\)\:\-]\s*|\b([A-Da-d])\.\s*)([^\n]+?)(?=(?:\s+\(?[A-Da-d1-4][\.\)\:\-]\s*|\s+\b[A-Da-d]\.\s*)|\Z)",
+    re.DOTALL
+)
 
 PRIMARY_LABEL_PREFIXES = (
     "question",
@@ -178,10 +185,108 @@ def _sort_options_grid(options: list[BaseShape]) -> list[BaseShape]:
     return result
 
 
+def _get_shape_multi_options(shape: BaseShape) -> list[str] | None:
+    if not shape.has_text_frame:
+        return None
+    tf = shape.text_frame
+    paras = [p.text.strip() for p in tf.paragraphs if p.text.strip()]
+    if len(paras) in (2, 3, 4) and any(OPT_MARKER_RE.match(p) for p in paras):
+        return paras
+    lines = [l.strip() for l in tf.text.splitlines() if l.strip()]
+    if len(lines) in (2, 3, 4) and any(OPT_MARKER_RE.match(l) for l in lines):
+        return lines
+    inline_m = list(INLINE_OPT_RE.finditer(tf.text))
+    if len(inline_m) in (2, 3, 4):
+        return [match.group(0).strip() for match in inline_m]
+    return None
+
+
+def _split_question_and_options(shape: BaseShape) -> tuple[str, list[str]] | None:
+    if not shape.has_text_frame:
+        return None
+    text = shape.text_frame.text.strip()
+    m = re.search(r"(?:^|[\r\n]+)\s*(?:\(?([A-Da-d1-4])[\.\)\:\-]\s*)", text)
+    if not m:
+        return None
+    q_text = text[:m.start()].strip()
+    opts_text = text[m.start():].strip()
+    if not q_text:
+        return None
+    lines = [l.strip() for l in opts_text.splitlines() if l.strip()]
+    if len(lines) == 4 and all(OPT_MARKER_RE.match(l) for l in lines):
+        return q_text, lines
+    paras = [p.strip() for p in opts_text.split("\n") if p.strip()]
+    if len(paras) == 4 and all(OPT_MARKER_RE.match(p) for p in paras):
+        return q_text, paras
+    inline_m = list(INLINE_OPT_RE.finditer(opts_text))
+    if len(inline_m) == 4:
+        return q_text, [match.group(0).strip() for match in inline_m]
+    return None
+
+
+def _try_expand_multi_options(slide, shapes: list[BaseShape]) -> list[BaseShape]:
+    if slide is None:
+        return shapes
+
+    # Case: Single box containing both question and 4 options
+    if len(shapes) == 1:
+        res = _split_question_and_options(shapes[0])
+        if res:
+            q_text, opt_texts = res
+            sh = shapes[0]
+            x, y, w, h = get_absolute_bounds(sh)
+            q_h = max(h // 3, 500_000)
+            tb_q = slide.shapes.add_textbox(x, y, w, q_h)
+            tb_q.text_frame.text = q_text
+
+            sub_h = max((h - q_h) // len(opt_texts), 400_000)
+            new_opts = []
+            for i, otxt in enumerate(opt_texts):
+                tb = slide.shapes.add_textbox(x, y + q_h + i * sub_h, w, sub_h)
+                tb.text_frame.text = otxt
+                new_opts.append(tb)
+
+            if sh._element.getparent() is not None:
+                sh._element.getparent().remove(sh._element)
+            return [tb_q] + new_opts
+
+    # Case: 2, 3, or 4 shapes where 1 or more shapes contain multiple options
+    if len(shapes) in (2, 3, 4):
+        plan = []
+        total_items = 0
+        for sh in shapes:
+            opts = _get_shape_multi_options(sh)
+            if opts:
+                plan.append((sh, opts))
+                total_items += len(opts)
+            else:
+                plan.append((sh, None))
+                total_items += 1
+
+        if total_items == 5:
+            expanded = []
+            for sh, opts in plan:
+                if opts:
+                    x, y, w, h = get_absolute_bounds(sh)
+                    sub_h = max(h // len(opts), 400_000)
+                    for i, otxt in enumerate(opts):
+                        tb = slide.shapes.add_textbox(x, y + i * sub_h, w, sub_h)
+                        tb.text_frame.text = otxt
+                        expanded.append(tb)
+                    if sh._element.getparent() is not None:
+                        sh._element.getparent().remove(sh._element)
+                else:
+                    expanded.append(sh)
+            return expanded
+
+    return shapes
+
+
 def _detect_candidate_poll(
     shapes: list[BaseShape],
     slide_num: int,
     slide_height: int,
+    slide=None,
 ) -> tuple[PollSlide | None, Skipped | None]:
     """Attempt to detect a poll slide from a set of text shapes."""
     labels: list[BaseShape] = []
@@ -226,7 +331,7 @@ def _detect_candidate_poll(
             y = get_absolute_bounds(sh)[1]
             if t.isdigit() and (y > slide_height * 0.75 or y < slide_height * 0.15):
                 extras_detected.append(sh)
-            elif any(h in t.lower() for h in ("think it through", "hint")):
+            elif any(h in t.lower() for h in ("think it through", "hint", "timer", "seconds", "choose", "select")):
                 extras_detected.append(sh)
             else:
                 cand_non_labels.append(sh)
@@ -234,6 +339,11 @@ def _detect_candidate_poll(
 
     if len(remaining) == 5:
         non_labels = remaining
+    else:
+        expanded = _try_expand_multi_options(slide, remaining)
+        if len(expanded) == 5:
+            non_labels = expanded
+            remaining = expanded
 
     if labels:
         primary = [l for l in labels if _is_primary_label(l)]
@@ -296,7 +406,7 @@ def find_polls(prs: Presentation) -> Detection:
         slide_num = idx + 1
 
         top_shapes = [s for s in slide.shapes if s.has_text_frame and s.text_frame.text.strip()]
-        poll, skip = _detect_candidate_poll(top_shapes, slide_num, prs.slide_height)
+        poll, skip = _detect_candidate_poll(top_shapes, slide_num, prs.slide_height, slide=slide)
         if poll is not None:
             polls.append(poll)
             continue
@@ -304,7 +414,7 @@ def find_polls(prs: Presentation) -> Detection:
         # If top-level shapes did not match a poll, check all shapes including grouped ones
         all_shapes = _collect_text_shapes(slide.shapes)
         if len(all_shapes) != len(top_shapes):
-            poll_grouped, skip_grouped = _detect_candidate_poll(all_shapes, slide_num, prs.slide_height)
+            poll_grouped, skip_grouped = _detect_candidate_poll(all_shapes, slide_num, prs.slide_height, slide=slide)
             if poll_grouped is not None:
                 polls.append(poll_grouped)
                 continue

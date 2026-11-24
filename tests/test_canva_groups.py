@@ -156,6 +156,55 @@ def test_synthetic_grouped_near_miss_reports_accurate_option_count():
     assert "grouped" not in report.skipped[0].reason
 
 
+def test_synthetic_multi_option_boxes_expanded_and_restyled():
+    """Tests slides with 1, 2, or 3 boxes containing 4 options (Slide 20, 26, 27/31 cases)."""
+    prs = pptx.Presentation()
+
+    # Slide 1: 1 question + 1 box containing all 4 options
+    s1 = prs.slides.add_slide(prs.slide_layouts[6])
+    lbl1 = s1.shapes.add_textbox(Inches(1), Inches(0.5), Inches(3), Inches(0.5))
+    lbl1.text = "QUESTION 20"
+    q1 = s1.shapes.add_textbox(Inches(1), Inches(1.2), Inches(8), Inches(1))
+    q1.text = "What is 20% of 250?"
+    opts1 = s1.shapes.add_textbox(Inches(1), Inches(2.5), Inches(8), Inches(3))
+    opts1.text_frame.text = "A. 50\nB. 40\nC. 60\nD. 45"
+
+    # Slide 2: 1 question + 2 boxes with 2 options each (2 columns)
+    s2 = prs.slides.add_slide(prs.slide_layouts[6])
+    lbl2 = s2.shapes.add_textbox(Inches(1), Inches(0.5), Inches(3), Inches(0.5))
+    lbl2.text = "QUESTION 26"
+    q2 = s2.shapes.add_textbox(Inches(1), Inches(1.2), Inches(8), Inches(1))
+    q2.text = "Express 3/4 as a percentage:"
+    col1 = s2.shapes.add_textbox(Inches(1), Inches(2.5), Inches(4), Inches(2))
+    col1.text_frame.text = "A. 75%\nB. 25%"
+    col2 = s2.shapes.add_textbox(Inches(5), Inches(2.5), Inches(4), Inches(2))
+    col2.text_frame.text = "C. 50%\nD. 80%"
+
+    # Slide 3: 1 question + 1 box with 2 options + 2 boxes with 1 option each
+    s3 = prs.slides.add_slide(prs.slide_layouts[6])
+    lbl3 = s3.shapes.add_textbox(Inches(1), Inches(0.5), Inches(3), Inches(0.5))
+    lbl3.text = "QUESTION 27"
+    q3 = s3.shapes.add_textbox(Inches(1), Inches(1.2), Inches(8), Inches(1))
+    q3.text = "If price increases by 10% and then decreases by 10%:"
+    box_ab = s3.shapes.add_textbox(Inches(1), Inches(2.5), Inches(8), Inches(1.5))
+    box_ab.text_frame.text = "A. Price remains same\nB. Price decreases by 1%"
+    box_c = s3.shapes.add_textbox(Inches(1), Inches(4.2), Inches(8), Inches(0.8))
+    box_c.text_frame.text = "C. Price increases by 1%"
+    box_d = s3.shapes.add_textbox(Inches(1), Inches(5.2), Inches(8), Inches(0.8))
+    box_d.text_frame.text = "D. Cannot be determined"
+
+    buf = io.BytesIO()
+    prs.save(buf)
+
+    out_bytes, report = process(buf.getvalue())
+    assert report.total_slides == 3
+    # All 3 slides must be detected as polls!
+    assert report.poll_slides == [1, 2, 3]
+    assert report.poll_count == 3
+    assert report.skipped == []
+
+
+
 @needs_discount
 def test_discount_deck_detects_all_quiz_slides_and_slide_25():
     prs = pptx.Presentation(str(DISCOUNT_DECK))
