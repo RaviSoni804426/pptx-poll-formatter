@@ -7,7 +7,7 @@ import pptx
 from . import spec
 from .detect import Detection, PollSlide, Skipped, find_polls
 from .restyle import restyle
-from .rebuild import build_polls_deck
+from .rebuild import build_polls_deck, build_inplace_deck
 
 
 @dataclass
@@ -18,6 +18,7 @@ class ProcessReport:
     non_poll_count: int
     ai_tutor_bytes: bytes = b""
     restyled_bytes: bytes = b""
+    inplace_bytes: bytes = b""
 
     @property
     def poll_count(self) -> int:
@@ -45,8 +46,12 @@ def process(pptx_bytes: bytes, mode: str = "restyle") -> tuple[bytes, ProcessRep
 
     # 1. Build Proven AI Tutor Deck (polls only, standard 23-shape blueprint)
     ai_tutor_bytes = b""
+    inplace_bytes = b""
     if detection.polls:
         ai_tutor_bytes = build_polls_deck(detection.polls)
+        # Full deck, poll slides swapped to the proven blueprint. Built BEFORE
+        # restyle() mutates the shapes it reads from.
+        inplace_bytes = build_inplace_deck(pptx_bytes, detection.polls)
 
     # 2. Build In-Place Restyled Deck (preserving non-poll slides byte-identically)
     modified_parts: dict[str, bytes] = {}
@@ -67,7 +72,12 @@ def process(pptx_bytes: bytes, mode: str = "restyle") -> tuple[bytes, ProcessRep
 
     restyled_bytes = out_buf.getvalue()
 
-    primary_bytes = ai_tutor_bytes if (mode == "rebuild" and ai_tutor_bytes) else restyled_bytes
+    if mode == "rebuild" and ai_tutor_bytes:
+        primary_bytes = ai_tutor_bytes
+    elif mode == "inplace" and inplace_bytes:
+        primary_bytes = inplace_bytes
+    else:
+        primary_bytes = restyled_bytes
 
     report = ProcessReport(
         total_slides=total_slides,
@@ -76,6 +86,7 @@ def process(pptx_bytes: bytes, mode: str = "restyle") -> tuple[bytes, ProcessRep
         non_poll_count=total_slides - len(detection.polls),
         ai_tutor_bytes=ai_tutor_bytes,
         restyled_bytes=restyled_bytes,
+        inplace_bytes=inplace_bytes,
     )
 
     return primary_bytes, report

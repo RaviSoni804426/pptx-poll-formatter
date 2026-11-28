@@ -130,6 +130,77 @@ def _ensure_unparented_groups(spTree, shapes: list) -> None:
                 break
 
 
+HINT_WORDS = ("think it through", "hint", "which one is correct")
+
+
+def _split_extras(extras: list) -> tuple:
+    """Split extras into (hint_shape, page_num_shape, other_extras).
+
+    detect() already sweeps hint lines and bare slide numbers into extras, so a
+    source deck that carries them is reused instead of duplicated.
+    """
+    hint = num = None
+    rest = []
+    for sh in extras:
+        if not sh.has_text_frame:
+            rest.append(sh)
+            continue
+        t = sh.text_frame.text.strip()
+        low = t.lower()
+        if hint is None and any(w in low for w in HINT_WORDS):
+            hint = sh
+        elif num is None and t.isdigit():
+            num = sh
+        else:
+            rest.append(sh)
+    return hint, num, rest
+
+
+def _set_single_run(shape, text: str, size_pt: float, bold, scale: float):
+    """Force shape to hold exactly one run with the given text and font."""
+    tf = shape.text_frame
+    while len(tf.paragraphs) > 1:
+        pe = tf.paragraphs[-1]._p
+        pe.getparent().remove(pe)
+    p0 = tf.paragraphs[0]
+    while len(p0.runs) > 1:
+        re_ = p0.runs[-1]._r
+        re_.getparent().remove(re_)
+    r = p0.runs[0] if p0.runs else p0.add_run()
+    r.text = text
+    r.font.name = spec.FONT
+    r.font.size = Pt(size_pt * scale)
+    r.font.bold = bold
+    return r
+
+
+def _trailing_shapes(slide, poll, poll_no: int, scale: float, hint_sh, num_sh):
+    """Return (hint_shape, page_number_shape), creating them if the slide lacks them.
+
+    AI Tutor will not recognise a poll slide whose text-shape sequence stops at
+    option D, so these two are mandatory, not decorative.
+    """
+    if hint_sh is None:
+        l, t, w, h = spec.HINT_BOX
+        hint_sh = slide.shapes.add_textbox(
+            int(l * scale), int(t * scale), int(w * scale), int(h * scale)
+        )
+        _set_single_run(hint_sh, spec.HINT_TEXT, spec.HINT[0], spec.HINT[1], scale)
+    else:
+        _set_single_run(
+            hint_sh, hint_sh.text_frame.text.strip() or spec.HINT_TEXT,
+            spec.HINT[0], spec.HINT[1], scale,
+        )
+
+    if num_sh is None:
+        l, t, w, h = spec.PAGE_NUM_BOX
+        num_sh = slide.shapes.add_textbox(
+            int(l * scale), int(t * scale), int(w * scale), int(h * scale)
+        )
+    _set_single_run(num_sh, str(poll_no), spec.PAGE_NUM[0], spec.PAGE_NUM[1], scale)
+    return hint_sh, num_sh
+
+
 def restyle(slide: Slide, poll: PollSlide, poll_no: int, scale: float = 1.0) -> None:
     """Restyle a single poll slide in-place:
     1. Label becomes 'POLL N' in Calibri 18 pt bold (preserving existing color).
@@ -143,6 +214,7 @@ def restyle(slide: Slide, poll: PollSlide, poll_no: int, scale: float = 1.0) -> 
     spTree = slide.shapes._spTree
 
     # Ensure all poll shapes are direct children of spTree before modifying
+    hint_sh, num_sh, other_extras = _split_extras(poll.extras)
     poll_shapes = [poll.label, poll.question] + poll.options + poll.existing_letters + poll.extras
     _ensure_unparented_groups(spTree, poll_shapes)
 
@@ -270,13 +342,21 @@ def restyle(slide: Slide, poll: PollSlide, poll_no: int, scale: float = 1.0) -> 
 
         letter_shapes.append(let_shape)
 
-    # 4. Shape order: label -> question -> A -> optA -> ... -> D -> optD -> extras
-    ordered_shapes = [label_shape, poll.question]
+    # 4. Trailing hint + page number (required by AI Tutor's sequence match)
+    hint_shape, num_shape = _trailing_shapes(
+        slide, poll, poll_no, scale, hint_sh, num_sh
+    )
+
+    # 5. Shape order. AI Tutor reads the slide's text shapes in document order and
+    #    expects exactly the accepted deck's sequence, so unrelated chips such as
+    #    "Concept Check" must sit BEFORE the block, never inside or after it:
+    #    [extras...] label, question, A, optA, B, optB, C, optC, D, optD, hint, N
+    ordered_shapes = list(other_extras)
+    ordered_shapes += [label_shape, poll.question]
     for let, opt in zip(letter_shapes, poll.options):
         ordered_shapes.append(let)
         ordered_shapes.append(opt)
-    for ext in poll.extras:
-        ordered_shapes.append(ext)
+    ordered_shapes += [hint_shape, num_shape]
 
     for sh in ordered_shapes:
         spTree.append(sh._element)

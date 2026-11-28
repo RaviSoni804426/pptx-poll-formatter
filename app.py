@@ -57,7 +57,7 @@ if uploaded_file is not None:
             time.sleep(0.1)
 
             progress_bar.progress(70, text="Restyling poll slides...")
-            out_bytes, report = process(file_bytes, mode="restyle")
+            out_bytes, report = process(file_bytes, mode="inplace")
 
             progress_bar.progress(100, text="Complete!")
             time.sleep(0.1)
@@ -73,14 +73,37 @@ if uploaded_file is not None:
 
             base_stem = Path(uploaded_file.name).stem
 
+            MIME = ("application/vnd.openxmlformats-officedocument"
+                    ".presentationml.presentation")
+
             if report.poll_count > 0:
-                st.subheader("Download Restyled Presentation")
+                st.subheader("Download")
+                st.caption(
+                    "Use **Tuto-Ready** if AI Tutor does not detect the polls. "
+                    "Its poll slides are byte-identical to the format AI Tutor "
+                    "is known to import; only the poll slides lose the source "
+                    "deck's custom artwork."
+                )
                 st.download_button(
-                    label="⬇️ Download Full Deck (Restyled)",
+                    label="⬇️ Full Deck — Tuto-Ready (proven poll layout)",
+                    data=report.inplace_bytes,
+                    file_name=f"{base_stem} - Tuto Ready.pptx",
+                    mime=MIME,
+                    type="primary",
+                    use_container_width=True,
+                )
+                st.download_button(
+                    label="⬇️ Full Deck — Restyled (keeps original artwork)",
                     data=report.restyled_bytes,
                     file_name=f"{base_stem} - Restyled Full.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    type="primary",
+                    mime=MIME,
+                    use_container_width=True,
+                )
+                st.download_button(
+                    label="⬇️ Polls Only (standalone deck)",
+                    data=report.ai_tutor_bytes,
+                    file_name=f"{base_stem} - Polls Only.pptx",
+                    mime=MIME,
                     use_container_width=True,
                 )
 

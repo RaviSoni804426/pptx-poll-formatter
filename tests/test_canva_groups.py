@@ -71,6 +71,8 @@ def test_synthetic_canva_grouped_option_cards_detected_and_restyled():
         "$3,000",
         "D",
         "$4,000",
+        "Think it through \u2014 which one is correct?",
+        "1",
     ]
 
 

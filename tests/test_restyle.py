@@ -60,13 +60,14 @@ def test_restyle_slide_8_labels_and_fonts(night_sky_deck):
             for r in p.runs:
                 assert r.font.name == "Calibri"
                 assert r.font.size == Pt(21.75 * scale)
-                assert r.font.bold is False
+                assert r.font.bold is None
 
     # 4. Shape order at the end of shape tree
     # Trailing shapes must be: POLL 1, Question, A, OptA, B, OptB, C, OptC, D, OptD, Concept Check
     all_shapes = list(slide8.shapes)
-    trailing = [s.text_frame.text.strip() for s in all_shapes[-11:]]
+    trailing = [s.text_frame.text.strip() for s in all_shapes[-13:]]
     assert trailing == [
+        "Concept Check",
         "POLL 1",
         "Why can villagers usually see more stars than city people?",
         "A",
@@ -77,7 +78,8 @@ def test_restyle_slide_8_labels_and_fonts(night_sky_deck):
         "Villages have less light pollution",
         "D",
         "Villages are closer to stars",
-        "Concept Check",
+        "Think it through \u2014 which one is correct?",
+        "1",
     ]
 
 
@@ -94,7 +96,7 @@ def test_letters_do_not_overlap_options(night_sky_deck):
     all_shapes = list(slide8.shapes)
     # The letters are shapes at all_shapes[-9], [-7], [-5], [-3]
     # Corresponding to A, B, C, D
-    letter_shapes = [all_shapes[-9], all_shapes[-7], all_shapes[-5], all_shapes[-3]]
+    letter_shapes = [all_shapes[-11], all_shapes[-9], all_shapes[-7], all_shapes[-5]]
     for idx, (let_sh, opt_sh) in enumerate(zip(letter_shapes, p8.options)):
         assert let_sh.text_frame.text.strip() == spec.LETTERS[idx]
         assert let_sh.left == orig_opt_lefts[idx]
@@ -135,4 +137,6 @@ def test_restyle_slide_with_no_label():
         "7",
         "D",
         "9",
+        "Think it through \u2014 which one is correct?",
+        "3",
     ]

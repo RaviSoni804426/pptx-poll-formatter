@@ -145,3 +145,86 @@ def build_polls_deck(polls: list[PollSlide], template_bytes: bytes | None = None
                 z_out.writestr(name, content)
 
     return out_buf.getvalue()
+
+
+_ICON_SRC = "ppt/media/poll-icon-star.png"
+_ICON_DST = "ppt/media/tuto-poll-icon-star.png"
+
+
+def _fill_blueprint_slide(base_slide_xml: bytes, poll: PollSlide, poll_no: int) -> bytes:
+    """Return the proven blueprint slide XML with this poll's content filled in."""
+    tree = etree.fromstring(base_slide_xml)
+    spTree = tree.find(f".//{{{NS_P}}}spTree")
+    text_sps = [sp for sp in spTree.findall(f"{{{NS_P}}}sp")
+                if sp.findall(f".//{{{NS_A}}}t")]
+
+    def set_text(sp, val):
+        ts = sp.findall(f".//{{{NS_A}}}t")
+        for t in ts[1:]:
+            t.text = ""
+        if ts:
+            ts[0].text = val
+
+    set_text(text_sps[0], f"POLL {poll_no}")
+    set_text(text_sps[1], poll.question.text_frame.text.strip())
+    for k in range(4):
+        set_text(text_sps[3 + k * 2],
+                 clean_option_text(poll.options[k].text_frame.text))
+    set_text(text_sps[11], str(poll_no))
+    return etree.tostring(tree)
+
+
+def build_inplace_deck(pptx_bytes: bytes, polls: list[PollSlide],
+                       template_bytes: bytes | None = None) -> bytes:
+    """Return the original deck with every poll slide REPLACED by the proven
+    AI Tutor blueprint slide.
+
+    Non-poll slides, layouts, masters and media stay byte-identical. This trades
+    the source deck's custom poll artwork for a layout AI Tutor is known to
+    import, which in-place restyling could not achieve.
+    """
+    if template_bytes is None:
+        template_bytes = _TEMPLATE_PATH.read_bytes()
+
+    with zipfile.ZipFile(io.BytesIO(template_bytes)) as z_t:
+        base_slide_xml = z_t.read("ppt/slides/slide1.xml")
+        icon_bytes = z_t.read(_ICON_SRC)
+
+    by_number = {p.number: (i + 1, p) for i, p in enumerate(polls)}
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as z_in:
+        # each poll slide keeps pointing at the layout it already used
+        layouts: dict[int, str] = {}
+        for n in by_number:
+            rels = z_in.read(f"ppt/slides/_rels/slide{n}.xml.rels").decode()
+            m = re.search(r'Target="(\.\./slideLayouts/[^"]+)"', rels)
+            layouts[n] = m.group(1) if m else "../slideLayouts/slideLayout1.xml"
+
+        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_in.infolist():
+                name = item.filename
+                m_slide = re.fullmatch(r"ppt/slides/slide(\d+)\.xml", name)
+                m_rels = re.fullmatch(r"ppt/slides/_rels/slide(\d+)\.xml\.rels", name)
+
+                if m_slide and int(m_slide.group(1)) in by_number:
+                    poll_no, poll = by_number[int(m_slide.group(1))]
+                    z_out.writestr(item, _fill_blueprint_slide(base_slide_xml, poll, poll_no))
+                elif m_rels and int(m_rels.group(1)) in by_number:
+                    n = int(m_rels.group(1))
+                    z_out.writestr(item, (
+                        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                        f'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
+                        f'officeDocument/2006/relationships/image" Target="../media/'
+                        f'{_ICON_DST.split("/")[-1]}"/>'
+                        f'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/'
+                        f'officeDocument/2006/relationships/slideLayout" Target="{layouts[n]}"/>'
+                        '</Relationships>'
+                    ).encode())
+                else:
+                    z_out.writestr(item, z_in.read(name))
+
+            z_out.writestr(_ICON_DST, icon_bytes)
+
+    return out.getvalue()

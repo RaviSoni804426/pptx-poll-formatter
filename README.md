@@ -1,21 +1,64 @@
-# PPTX Poll Formatter (Restyle Mode)
+# PPTX Poll Formatter
 
-A Streamlit web application that finds poll/quiz slides in PowerPoint lecture decks, restyles their text into the exact font hierarchy and shape ordering required by AI Tutor, and preserves everything else (backgrounds, cards, freeforms, images, non-poll slides) byte-identically.
+A Streamlit app that finds poll/quiz slides in PowerPoint lecture decks and converts them into the exact slide format AI Tutor (Tuto LMS) imports, leaving every non-poll slide byte-identical.
 
 ---
 
-## Features
+## Output Modes
 
-- **In-Place Restyling**: Preserves original slide backgrounds, freeforms, card shapes, and graphics.
-- **AI Tutor Compatible Format**:
-  - `POLL N` label: Calibri 18 pt, Bold (preserves original label color)
-  - Question: Calibri 28.5 pt, Bold (preserves run colors)
-  - Letters `A`–`D`: Calibri 30 pt, Bold (adds individual letter textboxes matching option text color)
-  - Options: Calibri 21.75 pt, Regular (nudged to the right so letters do not overlap)
-  - Shape order: Reorders text shapes to `[label, question, A, optA, B, optB, C, optC, D, optD, extras...]` at the end of the slide's shape tree.
-- **Byte-Identical Preservation**: Non-poll slide XML parts and non-text shapes on poll slides are 100% byte-identical between input and output.
-- **Smart Detection**: Detects slides with 1 question + 4 options in 2×2 grid or 4-row layout. Near-misses (e.g. 3 options) are reported as skipped rather than altered silently.
-- **Zero Disk Footprint**: All files are processed in-memory per request; no user decks are stored on disk.
+### 1. Tuto-Ready (default) — `mode="inplace"`
+
+Replaces every detected poll slide **inside the original package** with the
+23-shape blueprint AI Tutor is known to import. Everything else in the deck is
+byte-identical.
+
+Per poll slide: Blank layout, slide-level background `#FBF6EC`, and these shapes
+in this exact order (AI Tutor reads the text in document order):
+
+| # | Name | Type | Geometry (EMU) | Colour | Content |
+|---|------|------|----------------|--------|---------|
+| 0 | Text 0 | TextBox | 960144, 685817, 9601440, 480072 | `#2E6FBE` | `POLL N` — Calibri 18 bold, left/middle |
+| 1 | Shape 1 | roundRect | 960144, 1303053, 16322448, 2057451 | `#E8F1FD` | question card |
+| 2 | Shape 2 | ellipse | 15636631, 1645961, 1371634² | `#4A90E2` | icon circle |
+| 3 | Image 0 | Picture | 15965823, 1975153, 713250² | — | 256×256 PNG |
+| 4 | Text 3 | TextBox | 1440216, 1303053, 13922088, 2057451 | `#3B2A5E` | question — Calibri 28.5 bold, middle |
+| 5/9/13/17 | Shape 4/8/12/16 | roundRect | 7886897 × 2126033 | `#FFFFFF` + shadow | option cards A–D |
+| 6/10/14/18 | Shape 5/9/13/17 | ellipse | 960144² | `#4A90E2` | letter circles |
+| 7/11/15/19 | Text 6/10/14/18 | TextBox | 960144² | `#FFFFFF` | `A`–`D` — Calibri 30 bold, centre/middle |
+| 8/12/16/20 | Text 7/11/15/19 | TextBox | 5966609 × 2126033 | `#3B2A5E` | option text — Calibri 21.75 regular, middle |
+| 21 | Text 20 | TextBox | 960144, 8984205, 16322448, 548654 | `#8B849A` | hint — Calibri 21 regular |
+| 22 | Text 21 | TextBox | 17327856, 9711171, 548654, 411490 | `#8B849A` | `N` — Calibri 15 regular, right/middle |
+
+All units EMU at `REF_WIDTH = 18288000`; other slide widths scale by
+`slide_width / REF_WIDTH`. Defined in one place: `poll_formatter/spec.py`.
+
+**Trade-off:** poll slides lose the source deck's Canva artwork. This is the only
+mode verified to import reliably.
+
+### 2. Restyled — keeps original artwork
+
+In-place restyling that preserves backgrounds, freeforms and images. Produces the
+correct font hierarchy and shape order but **has not imported reliably into AI
+Tutor**. Use only if the artwork matters more than automatic poll detection.
+
+### 3. Polls Only — standalone deck
+
+Just the extracted polls on the blueprint, as a separate presentation.
+
+---
+
+## Rules
+
+- **Detection**: a `Concept Check` / `Poll question` style label plus exactly
+  1 question box and 4 option boxes. Anything else is reported as skipped, never
+  silently altered.
+- **Option order**: read from the source 2×2 grid, row first (top→bottom) then
+  column (left→right): top-left `A`, top-right `B`, bottom-left `C`, bottom-right `D`.
+- **Text**: question and option wording is preserved; only surrounding whitespace
+  is trimmed and any leading `A.` / `1)` marker removed.
+- **Numbering**: `POLL N` and the corner number both start at 1 in deck order.
+- **Scope**: work happens inside the uploaded package. Non-poll slides, layouts,
+  masters and media are never touched.
 
 ---
 
